@@ -1,0 +1,36 @@
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Logs and runtime files
+*.log
+logs/
+
+# Local model files
+models/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Local caches
+.cache/
+huggingface/
+hf_cache/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/

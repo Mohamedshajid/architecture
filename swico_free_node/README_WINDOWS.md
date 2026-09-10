@@ -1,0 +1,254 @@
+# Swico Free node on Windows 11
+
+This folder is a separate CPU inference service for Swico Free. It is not imported by the Render backend and its dependencies must not be added to `backend/requirements.txt`.
+
+The service is sized for the 8 GB CPU-only laptop: one active generation, a
+small defensive local buffer of three waiting requests, a conservative
+1024-token context,
+and a recommended 256-output-token ceiling. Durable backend queueing handles
+accepted web-chat work ahead of this final local buffer. Run one worker so
+both models load once and remain resident.
+
+## Workflow A: Windows PowerShell
+
+From a fresh Windows 11 PowerShell, install the basic tools (or install the same tools from their official installers):
+
+```powershell
+winget install --id Python.Python.3.11 --exact
+winget install --id Git.Git --exact
+winget install --id Kitware.CMake --exact
+```
+
+Close and reopen PowerShell after installation, then run:
+
+```powershell
+git clone <your-repository-url>
+Set-Location .\ai_tool\swico_free_node
+Copy-Item .env.example .env
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\doctor.ps1
+.\scripts\install.ps1
+```
+
+If `llama-cpp-python` has no compatible wheel for the selected Python version, install the Visual Studio 2022 C++ Build Tools workload and rerun `install.ps1`; the package may then build locally.
+
+Edit `.env`. `SWICO_FREE_NODE_TOKEN` must be the same long random secret later configured in Render. `SWICO_FREE_QWEN_GGUF_PATH` must point to an existing quantized GGUF file, and `SWICO_FREE_E5_MODEL_PATH` must point to a local Transformers model directory. The node never downloads a base model when these paths are configured.
+
+The recommended values for the i5-8265U / 8 GB laptop are:
+
+```dotenv
+SWICO_FREE_NODE_HOST=127.0.0.1
+SWICO_FREE_NODE_PORT=8765
+SWICO_FREE_QWEN_THREADS=2
+SWICO_FREE_QWEN_BATCH_SIZE=16
+SWICO_FREE_QWEN_CONTEXT_SIZE=1024
+SWICO_FREE_E5_THREADS=2
+SWICO_FREE_MAX_CONCURRENT_GENERATIONS=1
+SWICO_FREE_MAX_QUEUE_SIZE=3
+SWICO_FREE_MAX_QUEUE_WAIT_SECONDS=15
+SWICO_FREE_MAX_TOTAL_REQUEST_SECONDS=45
+SWICO_FREE_MAX_OUTPUT_TOKENS=256
+SWICO_FREE_MAX_CONCURRENT_EMBEDDINGS=1
+SWICO_FREE_MAX_EMBEDDING_QUEUE_SIZE=4
+```
+
+The trained Qwen artifact must be exported before use: merge any adapter into the intended checkpoint, convert it with a compatible llama.cpp conversion tool, and quantize the resulting GGUF (for example, a tested Q4_K_M or Q5_K_M build). This repository does not include the base model, adapter, conversion tools, or weights. Do not point the node at an adapter directory or an unconverted Transformers checkpoint.
+
+## Validate models before starting
+
+Run this after configuring `.env`. It performs local-only artifact checks, loads both models, verifies 384-dimensional E5 output, and performs tiny smoke generations. It does not download anything:
+
+```powershell
+Set-Location .\swico_free_node
+.\scripts\validate_models.ps1
+```
+
+For a SentenceTransformers export, the validator reads `modules.json` and uses
+the Transformer module's declared `path`. If that value is empty, as in the
+current `D:\\swico\\models\\multilingual-e5-small` export, the Transformer
+files are loaded from the SentenceTransformers root itself. If it is
+`0_Transformer`, that child directory is used. Pooling and parameter-free
+Normalize modules do not need to be present for this direct Transformers
+runtime.
+
+## Start and test locally
+
+```powershell
+Set-Location .\swico_free_node
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\run.ps1
+```
+
+In another PowerShell:
+
+```powershell
+Set-Location .\swico_free_node
+.\scripts\health.ps1
+. .\scripts\dotenv.ps1
+Import-SwicoFreeDotEnv (Join-Path (Get-Location) '.env')
+$token = $env:SWICO_FREE_NODE_TOKEN
+$headers = @{ Authorization = "Bearer $token" }
+Invoke-RestMethod -Uri http://127.0.0.1:8765/v1/embed -Method Post -Headers $headers -ContentType 'application/json' -Body '{"texts":["query text","document text"],"modes":["query","passage"]}'
+Invoke-RestMethod -Uri http://127.0.0.1:8765/v1/generate -Method Post -Headers $headers -ContentType 'application/json' -Body '{"messages":[{"role":"user","content":"Say hello in one sentence."}],"max_output_tokens":32}'
+```
+
+The repository also includes a no-secret-output smoke script:
+
+```powershell
+.\scripts\smoke.ps1
+```
+
+Benchmark the already-running node. The output contains timings, generated-token count, throughput, and queue counters, but never prompts, paths, or tokens:
+
+```powershell
+.\scripts\benchmark.ps1
+```
+
+The capacity benchmark warms the node, then measures approximately 64-token
+short, 128-token normal, and 256-token long workloads over multiple iterations.
+It reports p50/p95 latency, first-token latency, prompt-processing timing when
+llama.cpp provides it, E5 timing, and benchmark-derived single-worker
+statistics. Generation admission waits at most 15 seconds and each generation
+request has a 45-second node wall-clock ceiling. Run the bounded queue test with:
+
+```powershell
+.\scripts\benchmark.ps1 --load
+```
+
+The lightweight doctor does not load either model. It checks Windows, Python,
+the virtual environment, dotenv values, local artifact paths, port 8765, and
+Tailscale status. It prints a safe `Next:` action for every failure.
+
+## Workflow B: Git Bash / MINGW64
+
+Use this workflow when the terminal prompt looks like:
+`SHAJAHAN@DESKTOP-QTF7F78 MINGW64 /d/swico/ai_tool/swico_free_node`.
+The `.sh` files are wrappers around the existing PowerShell scripts; they do
+not duplicate node or inference logic. They convert Git Bash paths such as
+`/d/swico/...` to Windows paths and invoke `powershell.exe` with
+`-NoProfile -ExecutionPolicy Bypass`.
+
+From Git Bash:
+
+```bash
+cd /d/swico/ai_tool/swico_free_node
+./scripts/doctor.sh
+./scripts/install.sh
+./scripts/validate_models.sh
+./scripts/run.sh
+```
+
+Run the last command in its own terminal. In a second Git Bash terminal:
+
+```bash
+cd /d/swico/ai_tool/swico_free_node
+./scripts/smoke.sh
+./scripts/funnel_smoke.sh
+./scripts/benchmark.sh
+```
+
+For the capacity benchmark and bounded 1/2/5/10/11/12-request queue test:
+
+```bash
+./scripts/benchmark.sh --load
+```
+
+## Sustained capacity test
+
+Run this only against an already-running node. It is a client-side test and
+does not load another copy of either model. The default 15-minute soak is
+split across 1-, 2-, and 5-client stages, followed by bounded short-request
+bursts at 10, 11, and 12 clients. It records safe queue, latency, throughput,
+RSS, and CPU metrics, then prints explicit gates and a conservative
+request-rate recommendation.
+
+```bash
+./scripts/capacity_test.sh --soak-minutes 15
+./scripts/capacity_test.sh --soak-minutes 15 --json-out capacity-report.json
+```
+
+The report is operational data only. It contains no prompts, answers, model
+paths, model names, user data, or secrets. A JSON report is ignored by Git.
+
+On a first run, `doctor.sh` may report expected failures for `.venv`, `.env`,
+the local model paths, port 8765, or Funnel before the later setup commands
+have been completed. Follow each printed `Next:` action and run it again.
+
+To test a Funnel URL without changing `.env`:
+
+```bash
+./scripts/funnel_smoke.sh -FunnelUrl https://desktop-qtf7f78.tailbdb31e.ts.net
+```
+
+## Tailscale Funnel
+
+Keep the API bound to `127.0.0.1:8765`; browsers must never call it directly. After signing in to Tailscale on this laptop, run:
+
+```powershell
+tailscale funnel --bg 8765
+tailscale funnel status
+```
+
+Copy the returned HTTPS URL into Render as `SWICO_FREE_INFERENCE_BASE_URL`. Keep the same token in the laptop `.env` as `SWICO_FREE_NODE_TOKEN` and in Render as `SWICO_FREE_INFERENCE_TOKEN`. Do not bind the model API to `0.0.0.0` and do not enable broad CORS.
+
+The local Funnel smoke test uses the token from `.env` without printing it:
+
+```bash
+./scripts/funnel_smoke.sh
+```
+
+## Final production readiness checklist
+
+Before keeping Swico Free enabled, confirm all of the following while the
+laptop is plugged into power:
+
+- Windows is configured not to sleep while plugged in.
+- Tailscale is running and `tailscale funnel status` shows the Funnel.
+- The node is listening only on `127.0.0.1:8765`.
+- `./scripts/doctor.sh` shows PASS for Python, `.venv`, models, node port,
+  Tailscale, and Funnel.
+- `./scripts/smoke.sh` passes locally.
+- `./scripts/funnel_smoke.sh` passes through the public HTTPS Funnel.
+
+The doctor performs filesystem and process checks only; it does not load a
+second copy of either model. Run it whenever the laptop is rebooted or the
+node is repaired.
+
+## Keep the laptop awake and start after login
+
+When the laptop is plugged in, prevent sleep and hibernation so the Funnel remains available:
+
+```powershell
+powercfg /change standby-timeout-ac 0
+powercfg /change hibernate-timeout-ac 0
+```
+
+Register the node to start for the current Windows user after login. The
+repository script is idempotent and keeps the secret in `.env`, not in the
+Task Scheduler command line. Run PowerShell as the same user who owns the
+Tailscale session:
+
+```powershell
+Set-Location .\swico_free_node
+.\scripts\install_autostart.ps1
+```
+
+From Git Bash, use the same safe wrapper:
+
+```bash
+cd /d/swico/ai_tool/swico_free_node
+./scripts/install_autostart.sh
+```
+
+To remove the task later:
+
+```bash
+./scripts/remove_autostart.sh
+```
+
+Start Tailscale Funnel after login unless Tailscale itself is already configured to start Funnel. Confirm both services before enabling Free in Render:
+
+```powershell
+tailscale funnel status
+Invoke-RestMethod -Uri https://desktop-qtf7f78.tailbdb31e.ts.net/health -Headers @{ Authorization = "Bearer <same-token>" }
+```

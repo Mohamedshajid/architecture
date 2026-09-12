@@ -51,3 +51,25 @@ def test_trirag_validates_deduplicates_and_preserves_provenance():
     assert ranked[0].score == .9
     assert ranked[0].document_id == "doc-1"
     assert ranked[0].chunk_id == "doc-1:0"
+
+
+def test_trirag_grounded_synthesis_prefers_verified_evidence():
+    rag = TriRAG()
+    evidence = [
+        Evidence(
+            "doc-1",
+            "RAM is significantly faster than an SSD. RAM has much lower latency and higher access speed.",
+            .95,
+            {},
+            "ram-doc",
+            "ram-doc:0",
+            .95,
+        )
+    ]
+    result = rag.grounded_synthesis(
+        "Is RAM faster than an SSD?",
+        ["SSD is faster than RAM."],
+        evidence,
+    )
+    assert result["text"] == evidence[0].content
+    assert result["grounding_status"] == "SUPPORTED"

@@ -164,13 +164,19 @@ class Orchestrator:
         status = VerificationStatus.NOT_REQUIRED
         ranked_evidence = self.trirag.retrieve(prompt, evidence or []) if evidence else []
         retrieval_requested = bool(re.search(r"\b(document|uploaded|source|according to|based on|policy|evidence|reference)\b", prompt.lower()))
-        if retrieval_requested and not ranked_evidence and self.retriever is not None:
+        if (retrieval_requested or verify) and not ranked_evidence and self.retriever is not None:
             ranked_evidence = self.trirag.retrieve_from_index(prompt)
+        grounded = None
         if verify:
             status, ranked_evidence = self.trirag.verify(prompt, results, ranked_evidence)
+            outputs = [
+                str(r.output.get("text", r.output)) if isinstance(r.output, dict) else str(r.output)
+                for r in results
+            ]
+            grounded = self.trirag.grounded_synthesis(prompt, outputs, ranked_evidence)
         aggregate = self.aggregator.combine(results, list(graph.tasks.values()))
         self.evidence_store.add(request_id, ranked_evidence)
-        return {"request_id": request_id, "status": "completed" if all(r.error is None for r in results) and results and not aggregate["failed_tasks"] else "failed", "verification_status": self.verification_gate.decide(status).value, "understanding": understanding, "text": self.trirag.synthesize(results), "results": [{"task_id": r.task_id, "capability": r.capability.value, "model_id": r.model_id, "latency_ms": round(r.latency_ms, 2), "provenance": r.provenance} for r in results], "task_results": aggregate["tasks"], "evidence": [{"source_id": e.source_id, "document_id": e.document_id, "chunk_id": e.chunk_id, "score": e.score, "similarity": e.similarity, "content": e.content} for e in ranked_evidence], "aggregate": aggregate, "metrics": {"total_latency_ms": round((time.time() - self.jobs[request_id]["started_at"]) * 1000, 2), "task_count": len(graph.tasks), "completed_tasks": len(results)}}
+        return {"request_id": request_id, "status": "completed" if all(r.error is None for r in results) and results and not aggregate["failed_tasks"] else "failed", "verification_status": self.verification_gate.decide(status).value, "understanding": understanding, "text": grounded["text"] if grounded is not None else self.trirag.synthesize(results), "results": [{"task_id": r.task_id, "capability": r.capability.value, "model_id": r.model_id, "latency_ms": round(r.latency_ms, 2), "provenance": r.provenance} for r in results], "task_results": aggregate["tasks"], "evidence": [{"source_id": e.source_id, "document_id": e.document_id, "chunk_id": e.chunk_id, "score": e.score, "similarity": e.similarity, "content": e.content} for e in ranked_evidence], "aggregate": aggregate, "metrics": {"total_latency_ms": round((time.time() - self.jobs[request_id]["started_at"]) * 1000, 2), "task_count": len(graph.tasks), "completed_tasks": len(results)}}
 
     def index_document(self, document: Document):
         if self.retriever is None:

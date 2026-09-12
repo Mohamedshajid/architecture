@@ -93,8 +93,9 @@ def test_task_graph_rejects_unknown_and_cyclic_dependencies():
 
     with pytest.raises(ValueError, match="unknown dependencies"):
         TaskGraph([Task("a", "coding", Capability.CODING, "x", dependencies=["missing"])])
-    a = Task("a", "coding", Capability.CODING, "x", dependencies=["b"])
-    b = Task("b", "chat", Capability.CHAT, "x", dependencies=["a"])
+    a = Task("a", "coding", Capability.CODING, "x")
+    b = Task("b", "chat", Capability.CHAT, "x", dependencies=[a.task_id])
+    a.dependencies = [b.task_id]
     with pytest.raises(ValueError, match="dependency cycle"):
         TaskGraph([a, b])
 
@@ -115,3 +116,27 @@ def test_aggregator_retains_partial_failures():
     aggregate = ResultAggregator().combine([completed], [failed])
     assert aggregate["model_count"] == 1
     assert aggregate["failed_tasks"][0]["error"] == "chat unavailable"
+
+
+def test_verified_response_does_not_blindly_return_contradictory_model_text():
+    node = make_orchestrator()
+    evidence = [
+        Evidence(
+            "doc-1",
+            "RAM is significantly faster than an SSD. RAM has much lower latency and higher access speed.",
+            .95,
+            {},
+            "ram-doc",
+            "ram-doc:0",
+            .95,
+        )
+    ]
+    result = asyncio.run(
+        node.run(
+            "debug RAM versus SSD",
+            verify=True,
+            evidence=evidence,
+        )
+    )
+    assert result["verification_status"] == VerificationStatus.VERIFIED.value
+    assert "RAM is significantly faster than an SSD" in result["text"]

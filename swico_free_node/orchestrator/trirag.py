@@ -58,6 +58,23 @@ class TriRAG:
     def synthesize(self, results: list[TaskResult]) -> str:
         return "\n\n".join(str(r.output.get("text", r.output)) for r in results)
 
+    def grounded_synthesis(self, query: str, outputs: list[str], evidence: list[Evidence]) -> dict:
+        ranked = self.rank(query, evidence)
+        verification = self.verify_claims(outputs, ranked)
+
+        if verification["verification_status"] == VerificationStatus.VERIFIED.value and ranked:
+            text = ranked[0].content
+            grounding_status = "SUPPORTED"
+        else:
+            text = "\n\n".join(outputs)
+            grounding_status = verification["grounding_status"]
+
+        return {
+            "text": text,
+            "grounding_status": grounding_status,
+            "verification_status": verification["verification_status"],
+        }
+
     def verify_claims(self, outputs: list[str], evidence: list[Evidence]) -> dict:
         valid = self.rank(" ".join(outputs), evidence)
         claims = [claim for output in outputs for claim in _claims(output)]

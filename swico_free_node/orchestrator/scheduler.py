@@ -218,20 +218,29 @@ class AdaptiveScheduler:
         started = time.time()
         queue_wait_started = time.perf_counter()
         await self._reserve_until_admitted(task, profile, cancellation)
+        queue_wait_ms = (time.perf_counter() - queue_wait_started) * 1000
         self._active[task.task_id] = task
         loaded = False
         try:
             if cancellation.is_set():
                 task.status = TaskStatus.CANCELLED
                 raise asyncio.CancelledError()
+
+            load_started = time.perf_counter()
             await adapter.load()
+            load_ms = (time.perf_counter() - load_started) * 1000
             loaded = True
+
             if cancellation.is_set():
                 task.status = TaskStatus.CANCELLED
                 raise asyncio.CancelledError()
+
             adapter.state = ModelLifecycleState.EXECUTING.value
             timeout = max(0.01, task.deadline - time.time())
+
+            inference_started = time.perf_counter()
             output = await asyncio.wait_for(adapter.execute(task.input, cancellation), timeout)
+            inference_ms = (time.perf_counter() - inference_started) * 1000
             if cancellation.is_set():
                 task.status = TaskStatus.CANCELLED
                 raise asyncio.CancelledError()
@@ -239,7 +248,9 @@ class AdaptiveScheduler:
             task.status, task.result, task.error = TaskStatus.COMPLETED, output, None
             return TaskResult(task.task_id, task.request_id, task.capability, output, profile.model_id, started, time.time(), {
                 "runtime": profile.runtime,
-                "queue_wait_ms": round((time.perf_counter() - queue_wait_started) * 1000, 2),
+                "queue_wait_ms": round(queue_wait_ms, 2),
+                "load_ms": round(load_ms, 2),
+                "inference_ms": round(inference_ms, 2),
                 "resource": self.resources.snapshot(),
             })
         except asyncio.CancelledError:

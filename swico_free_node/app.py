@@ -12,8 +12,8 @@ import hashlib
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile, File
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,7 @@ try:
     from .e5_runtime import E5Runtime
     from .qwen_runtime import QwenRuntime
     from .whisper_runtime import WhisperRuntime
+    from .kokoro_runtime import KokoroRuntime
     from .schemas import EmbedRequest, GenerateRequest
     from .orchestrator import Orchestrator
     from .orchestrator.api import create_router
@@ -40,6 +41,7 @@ except ImportError:  # pragma: no cover - direct uvicorn execution from this fol
     from e5_runtime import E5Runtime
     from qwen_runtime import QwenRuntime
     from whisper_runtime import WhisperRuntime
+    from kokoro_runtime import KokoroRuntime
     from schemas import EmbedRequest, GenerateRequest
     from orchestrator import Orchestrator
     from orchestrator.api import create_router
@@ -130,6 +132,7 @@ config: NodeConfig | None = None
 qwen: QwenRuntime | None = None
 e5: E5Runtime | None = None
 stt_runtime: WhisperRuntime | None = None
+tts_runtime: KokoroRuntime | None = None
 capacity: GenerationCapacity | None = None
 embedding_capacity: GenerationCapacity | None = None
 orchestrator: Orchestrator | None = None
@@ -204,6 +207,11 @@ class STTRequest(BaseModel):
     request_id: str | None = Field(default=None, max_length=256)
     deadline_seconds: float = Field(default=180, ge=1, le=300)
 
+class VoiceUploadRequest(BaseModel):
+    language: str | None = Field(default=None, max_length=16)
+    request_id: str | None = Field(default=None, max_length=256)
+    deadline_seconds: float = Field(default=180, ge=1, le=300)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -228,10 +236,20 @@ async def lifespan(_app: FastAPI):
             batch_size=config.qwen_batch_size,
             context_size=config.qwen_context_size,
         )
+    image_path = os.getenv("SWICO_IMAGE_MODEL_PATH", "").strip()
+    image_runtime = None
+    if not config.mock_mode and image_path and os.path.isdir(image_path):
+        from image_runtime import SmallStableDiffusionRuntime
+        image_runtime = SmallStableDiffusionRuntime(image_path)
+
     stt_path = os.getenv("SWICO_STT_MODEL_PATH", "").strip()
     stt_runtime = None
     if not config.mock_mode and stt_path and os.path.isdir(stt_path):
         stt_runtime = WhisperRuntime(__import__('pathlib').Path(stt_path), threads=2)
+    tts_path = os.getenv("SWICO_TTS_MODEL_PATH", "").strip()
+    tts_runtime = None
+    if not config.mock_mode:
+        tts_runtime = KokoroRuntime(__import__("pathlib").Path(tts_path) if tts_path else None, threads=2)
     capacity = GenerationCapacity(config.max_concurrent_generations, config.max_queue_size)
     embedding_capacity = GenerationCapacity(
         config.max_concurrent_embeddings, config.max_embedding_queue_size,
@@ -240,6 +258,8 @@ async def lifespan(_app: FastAPI):
         qwen, e5, config.max_output_tokens, config.mock_mode,
         coding_runtime=coding_runtime,
         stt_runtime=stt_runtime,
+        tts_runtime=tts_runtime,
+        image_runtime=image_runtime,
         resources=ResourceManager(
             min_free_ram_mb=config.min_free_ram_mb,
             max_heavy_models_resident=config.max_heavy_models_resident,
@@ -272,13 +292,137 @@ async def orchestrate_endpoint(payload: OrchestrateRequest, _: None = Depends(re
     evidence = [Evidence(source_id=str(item.get("source_id", "unknown")), content=str(item.get("content", "")), score=float(item.get("score", 0))) for item in payload.evidence]
     if payload.background:
         request_id = payload.request_id or str(__import__('uuid').uuid4())
-        task = asyncio.create_task(orchestrator.run(payload.prompt, request_id=request_id, verify=payload.verify, evidence=evidence, deadline_seconds=payload.deadline_seconds, capability=payload.capability, priority=payload.priority))
+        task = asyncio.create_task(orchestrator.run(payload.prompt, request_id=request_id, verify=payload.verify, evidence=evidence, deadline_seconds=payload.deadline_seconds, capability=payload.capability, priority=payload.priority, output_format=payload.format, document_path=payload.document_path))
         orchestrator.jobs.setdefault(request_id, {"graph": None, "started_at": time.time(), "cancelled": False, "future": task})
         return {"request_id": request_id, "status": "accepted"}
     try:
-        return await orchestrator.run(payload.prompt, request_id=payload.request_id, verify=payload.verify, evidence=evidence, deadline_seconds=payload.deadline_seconds, capability=payload.capability, priority=payload.priority)
+        return await orchestrator.run(payload.prompt, request_id=payload.request_id, verify=payload.verify, evidence=evidence, deadline_seconds=payload.deadline_seconds, capability=payload.capability, priority=payload.priority, output_format=payload.format, document_path=payload.document_path)
     except (TimeoutError, RuntimeError) as exc:
         raise HTTPException(503, {"code": "orchestration_unavailable", "message": str(exc)}) from exc
+
+
+@app.get("/v1/image")
+async def image_endpoint(
+    path: str = Query(..., min_length=1, max_length=2_000),
+    _: None = Depends(require_auth),
+):
+    image_path = os.path.abspath(path)
+    allowed_dir = os.path.abspath(os.path.join("data", "images"))
+
+    if not image_path.startswith(allowed_dir + os.sep):
+        raise HTTPException(
+            403,
+            {"code": "invalid_image_path", "message": "Image path is not allowed."},
+        )
+
+    if not os.path.isfile(image_path):
+        raise HTTPException(
+            404,
+            {"code": "image_not_found", "message": "Image was not found."},
+        )
+
+    return FileResponse(
+        image_path,
+        media_type="image/png",
+        filename=os.path.basename(image_path),
+    )
+
+
+@app.post("/v1/voice")
+async def voice_endpoint(
+    payload: STTRequest,
+    _: None = Depends(require_auth),
+):
+    if orchestrator is None:
+        raise HTTPException(503, {"code": "swico_free_unavailable"})
+
+    try:
+        return await orchestrator.voice_response(
+            payload.audio_path,
+            payload.language,
+            conversation_id=None,
+            request_id=payload.request_id,
+            deadline_seconds=payload.deadline_seconds,
+        )
+    except (TimeoutError, RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            503,
+            {"code": "voice_unavailable", "message": str(exc)},
+        ) from exc
+
+
+@app.post("/v1/voice/upload")
+async def voice_upload_endpoint(
+    audio: UploadFile = File(...),
+    language: str | None = None,
+    request_id: str | None = None,
+    deadline_seconds: float = 180,
+    _: None = Depends(require_auth),
+):
+    if orchestrator is None:
+        raise HTTPException(503, {"code": "swico_free_unavailable"})
+
+    if not audio.filename:
+        raise HTTPException(400, {"code": "invalid_audio", "message": "Audio filename is required"})
+
+    upload_dir = os.path.join("data", "voice_uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+
+    safe_name = os.path.basename(audio.filename)
+    upload_path = os.path.join(upload_dir, f"{request_id or secrets.token_hex(16)}_{safe_name}")
+
+    try:
+        with open(upload_path, "wb") as f:
+            while True:
+                chunk = await audio.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+
+        return await orchestrator.voice_response(
+            upload_path,
+            language,
+            conversation_id=None,
+            request_id=request_id,
+            deadline_seconds=deadline_seconds,
+        )
+    except (TimeoutError, RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            503,
+            {"code": "voice_unavailable", "message": str(exc)},
+        ) from exc
+    finally:
+        try:
+            os.remove(upload_path)
+        except FileNotFoundError:
+            pass
+
+
+@app.get("/v1/voice/audio")
+async def voice_audio_endpoint(
+    path: str = Query(..., min_length=1, max_length=2_000),
+    _: None = Depends(require_auth),
+):
+    audio_path = os.path.abspath(path)
+    allowed_dir = os.path.abspath(os.path.join("data", "tts"))
+
+    if not audio_path.startswith(allowed_dir + os.sep):
+        raise HTTPException(
+            403,
+            {"code": "invalid_audio_path", "message": "Audio path is not allowed."},
+        )
+
+    if not os.path.isfile(audio_path):
+        raise HTTPException(
+            404,
+            {"code": "audio_not_found", "message": "Audio file was not found."},
+        )
+
+    return StreamingResponse(
+        open(audio_path, "rb"),
+        media_type="audio/wav",
+        headers={"Content-Disposition": f'inline; filename="{os.path.basename(audio_path)}"'},
+    )
 
 
 @app.post("/v1/stt")

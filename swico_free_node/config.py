@@ -50,9 +50,9 @@ class NodeConfig:
     def model_paths(self) -> dict[str, Path | None]:
         return {
             "embedding-e5-small": self.e5_model_path,
-            "chat-qwen3-0.6b": self.chat_model_path,
-            "coding-qwen2.5-coder-0.5b": self.coding_model_path,
-            "image-mobilediffusion": self.image_model_path,
+            "chat-qwen3-1.7b": self.chat_model_path,
+            "coding-qwen2.5-coder-1.5b": self.coding_model_path,
+            "image-small-sd-v0": self.image_model_path,
             "video-wan2.1-t2v-1.3b": self.video_model_path,
             "stt-whisper-base": self.stt_model_path,
             "tts-kokoro-82m": self.tts_model_path,

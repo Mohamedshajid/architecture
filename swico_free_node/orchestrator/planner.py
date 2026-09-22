@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .controller import detect_capabilities
 from .models import Capability, Task, TaskStatus
-
+import re
 
 class TaskGraph:
     def __init__(self, tasks: list[Task]):
@@ -53,7 +53,7 @@ class TaskGraph:
 
 
 class TaskPlanner:
-    def plan(self, request_id: str, prompt: str, verify: bool = False, deadline_seconds: float = 45, capability: Capability | str | None = None, priority: int | None = None) -> TaskGraph:
+    def plan(self, request_id: str, prompt: str, verify: bool = False, deadline_seconds: float = 45, capability: Capability | str | None = None, priority: int | None = None, output_format: str | None = None, document_path: str | None = None) -> TaskGraph:
         if capability is not None:
             selected = capability if isinstance(capability, Capability) else Capability(capability)
             capabilities: list[Capability] = [selected]
@@ -61,7 +61,7 @@ class TaskPlanner:
             capabilities = detect_capabilities(prompt)
         if not capabilities:
             capabilities = [Capability.CHAT]
-        elif Capability.CODING not in capabilities and not any(c in capabilities for c in (Capability.IMAGE_GENERATION, Capability.STT, Capability.TTS, Capability.VIDEO_GENERATION, Capability.DOCUMENT_CREATION, Capability.DOCUMENT_ANALYSIS)):
+        elif Capability.CHAT not in capabilities and Capability.CODING not in capabilities and not any(c in capabilities for c in (Capability.IMAGE_GENERATION, Capability.STT, Capability.TTS, Capability.VIDEO_GENERATION, Capability.DOCUMENT_CREATION, Capability.DOCUMENT_ANALYSIS)):
             capabilities.insert(0, Capability.CHAT)
         if Capability.DOCUMENT_ANALYSIS in capabilities and Capability.CHAT not in capabilities:
             capabilities.insert(capabilities.index(Capability.DOCUMENT_ANALYSIS) + 1, Capability.CHAT)
@@ -73,8 +73,30 @@ class TaskPlanner:
         previous_analysis: str | None = None
         for capability in capabilities:
             dependent = capability in (Capability.CHAT, Capability.DOCUMENT_CREATION) and previous_analysis is not None
+            if capability == Capability.DOCUMENT_ANALYSIS:
+                task_input = {
+                    "prompt": prompt,
+                    "document_path": document_path,
+                }
+            elif capability == Capability.STT:
+                audio_match = re.search(
+                    r'(?P<audio_path>(?:/[^ \n]+)+\.(?:wav|mp3|m4a|flac|ogg))',
+                    prompt,
+                    re.IGNORECASE,
+                )
+                task_input = {
+                    "audio_path": audio_match.group("audio_path") if audio_match else None,
+                    "language": "en",
+                }
+            elif output_format is None:
+                task_input = prompt
+            else:
+                task_input = {
+                    "prompt": prompt,
+                    "format": output_format,
+                }
             task = Task(request_id=request_id, task_type=capability.value, capability=capability,
-                        input=prompt, dependencies=[previous_analysis] if dependent else [],
+                        input=task_input, dependencies=[previous_analysis] if dependent else [],
                         priority=priority if priority is not None else (80 if capability == Capability.VIDEO_GENERATION else 60),
                         verification_required=verify, deadline=__import__('time').time() + deadline_seconds)
             tasks.append(task)

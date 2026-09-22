@@ -18,6 +18,8 @@ class OrchestrateRequest(BaseModel):
     deadline_seconds: float = Field(default=45, ge=1, le=300)
     evidence: list[dict[str, Any]] = Field(default_factory=list, max_length=64)
     background: bool = False
+    format: str | None = Field(default=None, max_length=16)
+    document_path: str | None = Field(default=None, max_length=2_000)
 
 
 def create_router(orchestrator: Orchestrator) -> APIRouter:
@@ -25,14 +27,15 @@ def create_router(orchestrator: Orchestrator) -> APIRouter:
 
     @router.post("/orchestrate")
     async def orchestrate(payload: OrchestrateRequest) -> dict[str, Any]:
+        print("DEBUG API document_path =", repr(payload.document_path))
         evidence = [Evidence(source_id=str(item.get("source_id", "unknown")), content=str(item.get("content", "")), score=float(item.get("score", 0))) for item in payload.evidence]
         if payload.background:
             request_id = payload.request_id or __import__('uuid').uuid4().__str__()
-            task = __import__('asyncio').create_task(orchestrator.run(payload.prompt, request_id=request_id, verify=payload.verify, evidence=evidence, deadline_seconds=payload.deadline_seconds, capability=payload.capability, priority=payload.priority))
+            task = __import__('asyncio').create_task(orchestrator.run(payload.prompt, request_id=request_id, verify=payload.verify, evidence=evidence, deadline_seconds=payload.deadline_seconds, capability=payload.capability, priority=payload.priority, output_format=payload.format, document_path=payload.document_path))
             orchestrator.jobs.setdefault(request_id, {"graph": None, "started_at": __import__('time').time(), "cancelled": False, "future": task})
             return {"request_id": request_id, "status": "accepted"}
         try:
-            return await orchestrator.run(payload.prompt, request_id=payload.request_id, verify=payload.verify, evidence=evidence, deadline_seconds=payload.deadline_seconds, capability=payload.capability, priority=payload.priority)
+            return await orchestrator.run(payload.prompt, request_id=payload.request_id, verify=payload.verify, evidence=evidence, deadline_seconds=payload.deadline_seconds, capability=payload.capability, priority=payload.priority, output_format=payload.format, document_path=payload.document_path)
         except (TimeoutError, RuntimeError) as exc:
             raise HTTPException(503, {"code": "orchestration_unavailable", "message": str(exc)}) from exc
 

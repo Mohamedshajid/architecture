@@ -34,3 +34,14 @@ hf_cache/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+
+# Local runtime/test data
+data/
+
+# Local backup files
+*.backup
+*.bak

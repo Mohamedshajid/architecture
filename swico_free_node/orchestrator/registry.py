@@ -53,9 +53,9 @@ class CapabilityRegistry:
 def default_profiles(model_paths: dict[str, object] | None = None) -> list[ModelProfile]:
     specs = [
         ("embedding-e5-small", "multilingual-e5-small", Capability.RETRIEVAL, "intfloat/multilingual-e5-small", "SWICO_FREE_E5_MODEL_PATH", "transformers", ("text",), ("embedding",), False),
-        ("chat-qwen3-0.6b", "Qwen3-0.6B", Capability.CHAT, "Qwen/Qwen3-0.6B", "SWICO_CHAT_MODEL_PATH", "qwen", ("text",), ("text",), True),
-        ("coding-qwen2.5-coder-0.5b", "Qwen2.5-Coder-0.5B-Instruct", Capability.CODING, "Qwen/Qwen2.5-Coder-0.5B-Instruct", "SWICO_CODING_MODEL_PATH", "qwen", ("text",), ("text",), True),
-        ("image-mobilediffusion", "MobileDiffusion", Capability.IMAGE_GENERATION, "MobileDiffusion", "SWICO_IMAGE_MODEL_PATH", "mobile_diffusion", ("text",), ("image",), False),
+        ("chat-qwen3-1.7b", "Qwen3-1.7B", Capability.CHAT, "Qwen/Qwen3-1.7B", "SWICO_CHAT_MODEL_PATH", "qwen", ("text",), ("text",), True),
+        ("coding-qwen2.5-coder-1.5b", "Qwen2.5-Coder-1.5B-Instruct", Capability.CODING, "Qwen/Qwen2.5-Coder-1.5B-Instruct", "SWICO_CODING_MODEL_PATH", "qwen", ("text",), ("text",), True),
+        ("image-small-sd-v0", "Small Stable Diffusion v0", Capability.IMAGE_GENERATION, "OFA-Sys/small-stable-diffusion-v0", "SWICO_IMAGE_MODEL_PATH", "diffusers", ("text",), ("image",), True),
         ("stt-whisper-base", "Whisper-base", Capability.STT, "openai/whisper-base", "SWICO_STT_MODEL_PATH", "whisper", ("audio",), ("text",), False),
         ("tts-kokoro-82m", "Kokoro-82M", Capability.TTS, "hexgrad/Kokoro-82M", "SWICO_TTS_MODEL_PATH", "kokoro", ("text",), ("audio",), False),
         ("video-wan2.1-t2v-1.3b", "Wan2.1 T2V-1.3B", Capability.VIDEO_GENERATION, "Wan-AI/Wan2.1-T2V-1.3B-Diffusers", "SWICO_VIDEO_MODEL_PATH", "diffusers", ("text",), ("video",), False),
@@ -65,21 +65,21 @@ def default_profiles(model_paths: dict[str, object] | None = None) -> list[Model
     profiles = []
     resource_defaults = {
         "embedding-e5-small": (700, 668, 2, True, False),
-        "chat-qwen3-0.6b": (862, 862, 2, True, False),
-        "coding-qwen2.5-coder-0.5b": (545, 545, 2, True, False),
+        "chat-qwen3-1.7b": (862, 862, 2, True, False),
+        "coding-qwen2.5-coder-1.5b": (1120, 1120, 2, True, False),
         "stt-whisper-base": (400, 340, 2, True, False),
         # 1,400 MB is an admission estimate, deliberately above the observed
         # process RSS because Kokoro reduced system available RAM to ~78.8 MB.
         "tts-kokoro-82m": (1400, 562, 2, True, False),
-        "image-mobilediffusion": (512, None, 2, True, False),
+        "image-small-sd-v0": (4096, 3580, 4, True, False),
         "video-wan2.1-t2v-1.3b": (2048, None, 4, True, True),
         "document-create-smollm2-360m": (512, None, 2, True, False),
         "document-analysis-smoldocling-256m": (512, None, 2, True, False),
     }
     expected_types = {
         "embedding-e5-small": "dir",
-        "chat-qwen3-0.6b": "file",
-        "coding-qwen2.5-coder-0.5b": "file",
+        "chat-qwen3-1.7b": "file",
+        "coding-qwen2.5-coder-1.5b": "file",
         "stt-whisper-base": "dir",
         "tts-kokoro-82m": "dir",
     }
